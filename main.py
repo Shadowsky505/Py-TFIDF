@@ -3,266 +3,80 @@ from nltk.tokenize import word_tokenize
 from nltk.stem import PorterStemmer
 from collections import Counter
 from num2words import num2words
+import os, numpy as np, re, math
 
-import nltk
-import os
-import string
-import numpy as np
-import copy
-import pandas as pd
-import pickle
-import re
-import math
+title, alpha = "stories", 0.3  # Parámetros globales
+folders = [x[0] for x in os.walk(os.getcwd() + '/' + title + '/')]
+folders[0] = folders[0][:-1]
 
-# Parámetros globales
-title = "stories" # Nombre del directorio que contiene los archivos
-alpha = 0.3 # Factor de ponderación
-
-# Lista de carpetas que contienen los documentos
-folders = [x[0] for x in os.walk(str(os.getcwd())+'/'+title+'/')]
-folders[0] = folders[0][:len(folders[0])-1]
-
-dataset = [] # Lista para almacenar los archivos y sus títulos
-c = False
-
-# Recorrer todas las carpetas y extraer información de cada archivo
+dataset, c = [], False
 for i in folders:
-    file = open(i+"/index.html", 'r')
-    text = file.read().strip()
-    file.close()
+    text = open(i + "/index.html", 'r').read().strip()
+    file_name, file_title = re.findall('><A HREF="(.*)">', text), re.findall('<BR><TD> (.*)\n', text)
+    if not c: file_name, c = file_name[2:], True
+    dataset += [(i + "/" + f, t) for f, t in zip(file_name, file_title)]
 
-    # Buscar nombres y títulos de los archivos en el texto
-    file_name = re.findall('><A HREF="(.*)">', text)
-    file_title = re.findall('<BR><TD> (.*)\n', text)
+N = len(dataset)
 
-    # Ajustar los archivos si es la primera iteración
-    if c == False:
-        file_name = file_name[2:]
-        c = True
-        
-    print(len(file_name), len(file_title))
-
-    # Añadir a la lista de datos cada archivo con su título
-    for j in range(len(file_name)):
-        dataset.append((str(i) +"/"+ str(file_name[j]), file_title[j]))
-
-len(dataset)
-N = len(dataset) # Número total de documentos
-
-# Función para imprimir el contenido de un documento dado su ID
 def print_doc(id):
-    print(dataset[id])
-    file = open(dataset[id][0], 'r', encoding='cp1250')
-    text = file.read().strip()
-    file.close()
-    print(text)
+    with open(dataset[id][0], 'r', encoding='cp1250') as f: print(dataset[id], f.read().strip())
 
-# Convertir el texto a minúsculas
-def convert_lower_case(data):
-    return np.char.lower(data)
-
-# Eliminar palabras de parada (stop words) del texto
-def remove_stop_words(data):
-    stop_words = stopwords.words('english')
-    words = word_tokenize(str(data))
-    new_text = ""
-    for w in words:
-        if w not in stop_words and len(w) > 1:
-            new_text = new_text + " " + w
-    return new_text
-
-# Eliminar signos de puntuación del texto
-def remove_punctuation(data):
-    symbols = "!\"#$%&()*+-./:;<=>?@[\]^_`{|}~\n"
-    for i in range(len(symbols)):
-        data = np.char.replace(data, symbols[i], ' ')
-        data = np.char.replace(data, "  ", " ")
-    data = np.char.replace(data, ',', '')
-    return data
-
-# Eliminar apóstrofes del texto
-def remove_apostrophe(data):
-    return np.char.replace(data, "'", "")
-
-# Realizar el stemming del texto (reducir las palabras a su raíz)
-def stemming(data):
-    stemmer= PorterStemmer()
-    tokens = word_tokenize(str(data))
-    new_text = ""
-    for w in tokens:
-        new_text = new_text + " " + stemmer.stem(w)
-    return new_text
-
-# Convertir números en palabras
-def convert_numbers(data):
-    tokens = word_tokenize(str(data))
-    new_text = ""
-    for w in tokens:
-        try:
-            w = num2words(int(w))
-        except:
-            pass
-        new_text = new_text + " " + w
-    new_text = np.char.replace(new_text, "-", " ")
-    return new_text
-
-# Función de preprocesamiento completa que aplica todos los pasos anteriores
+# Funciones de preprocesamiento
 def preprocess(data):
-    data = convert_lower_case(data)
-    data = remove_punctuation(data) 
-    data = remove_apostrophe(data)
-    data = remove_stop_words(data)
-    data = convert_numbers(data)
-    data = stemming(data)
-    data = remove_punctuation(data)
-    data = convert_numbers(data)
-    data = stemming(data) 
-    data = remove_punctuation(data) 
-    data = remove_stop_words(data) 
-    return data
+    stop_words = set(stopwords.words('english'))
+    stemmer = PorterStemmer()
+    data = re.sub(r"[^\w\s]", " ", data).lower()
+    tokens = [stemmer.stem(num2words(w) if w.isdigit() else w) for w in word_tokenize(data) 
+              if w not in stop_words and len(w) > 1]
+    return " ".join(tokens)
 
-# Listas para almacenar los textos y títulos procesados
-processed_text = []
-processed_title = []
+# Procesar textos y títulos
+processed_text = [word_tokenize(preprocess(open(i[0], 'r', encoding="utf8", errors='ignore').read())) for i in dataset]
+processed_title = [word_tokenize(preprocess(i[1])) for i in dataset]
 
-# Procesar cada documento y su título
-for i in dataset[:N]:
-    file = open(i[0], 'r', encoding="utf8", errors='ignore')
-    text = file.read().strip()
-    file.close()
+# Frecuencia de documentos por palabra
+DF = {w: set() for doc in processed_text + processed_title for w in doc}
+for i, doc in enumerate(processed_text + processed_title):
+    for w in set(doc): DF[w].add(i)
+DF = {k: len(v) for k, v in DF.items()}
 
-    processed_text.append(word_tokenize(str(preprocess(text))))
-    processed_title.append(word_tokenize(str(preprocess(i[1]))))
+# Calcular TF-IDF
+def calculate_tf_idf(docs):
+    tf_idf = {}
+    for i, tokens in enumerate(docs):
+        words_count = len(tokens)
+        counter = Counter(tokens)
+        for token in set(tokens):
+            tf = counter[token] / words_count
+            idf = math.log((N + 1) / (DF.get(token, 0) + 1))
+            tf_idf[i, token] = tf * idf
+    return tf_idf
 
-# Crear un diccionario para almacenar la frecuencia de documentos por palabra
-DF = {}
+tf_idf, tf_idf_title = calculate_tf_idf(processed_text), calculate_tf_idf(processed_title)
+tf_idf = {k: v * alpha + tf_idf_title.get(k, 0) for k, v in tf_idf.items()}
 
-# Contar la frecuencia de palabras en los textos y títulos procesados
-for i in range(N):
-    tokens = processed_text[i]
-    for w in tokens:
-        try:
-            DF[w].add(i)
-        except:
-            DF[w] = {i}
+# Similitud coseno
+def cosine_similarity(query):
+    query_tokens = word_tokenize(preprocess(query))
+    query_vector = gen_vector(query_tokens)
+    d_cosines = [np.dot(query_vector, D[d]) / (np.linalg.norm(query_vector) * np.linalg.norm(D[d])) for d in range(N)]
+    best_match = np.argmax(d_cosines)  # Obtener el índice con mayor similitud coseno
+    return best_match
 
-    tokens = processed_title[i]
-    for w in tokens:
-        try:
-            DF[w].add(i)
-        except:
-            DF[w] = {i}
-for i in DF:
-    DF[i] = len(DF[i])
-
-# Tamaño del vocabulario total
-total_vocab_size = len(DF)
-total_vocab = [x for x in DF]
-print(total_vocab[:20])
-
-# Función para obtener la frecuencia de documentos de una palabra dada
-def doc_freq(word):
-    c = 0
-    try:
-        c = DF[word]
-    except:
-        pass
-    return c
-
-# Calcular el TF-IDF para cada palabra en cada documento
-tf_idf = {}
-
-for i in range(N):
-    tokens = processed_text[i]
-    counter = Counter(tokens + processed_title[i])
-    words_count = len(tokens + processed_title[i])
-    for token in np.unique(tokens):
-        tf = counter[token]/words_count
-        df = doc_freq(token)
-        idf = np.log((N+1)/(df+1))
-        tf_idf[i, token] = tf*idf
-
-# Calcular el TF-IDF para los títulos
-tf_idf_title = {}
-
-for i in range(N):
-    tokens = processed_title[i]
-    counter = Counter(tokens + processed_text[i])
-    words_count = len(tokens + processed_title[i])
-    for token in np.unique(tokens):
-        tf = counter[token]/words_count
-        df = doc_freq(token)
-        idf = np.log((N+1)/(df+1))
-        tf_idf_title[i, token] = tf*idf
-
-# Ponderar los valores de TF-IDF
-for i in tf_idf:
-    tf_idf[i] *= alpha
-for i in tf_idf_title:
-    tf_idf[i] = tf_idf_title[i]
-
-len(tf_idf)
-
-# Calcular el score de coincidencia para un query dado
-def matching_score(k, query):
-    preprocessed_query = preprocess(query)
-    tokens = word_tokenize(str(preprocessed_query))
-    print("Matching Score")
-    print("\nQuery:", query)
-    print(tokens)
-    query_weights = {}
-    for key in tf_idf:
-        if key[1] in tokens:
-            try:
-                query_weights[key[0]] += tf_idf[key]
-            except:
-                query_weights[key[0]] = tf_idf[key]
-    query_weights = sorted(query_weights.items(), key=lambda x: x[1], reverse=True)
-    l = [i[0] for i in query_weights[:10]]
-    print(l)
-
-# Calcular la similitud coseno entre dos vectores
-def cosine_sim(a, b):
-    return np.dot(a, b)/(np.linalg.norm(a)*np.linalg.norm(b))
-
-# Matriz D para almacenar vectores de documentos
-D = np.zeros((N, total_vocab_size))
-for i in tf_idf:
-    try:
-        ind = total_vocab.index(i[1])
-        D[i[0]][ind] = tf_idf[i]
-    except:
-        pass
-
-# Generar el vector del query
+# Vector del query
 def gen_vector(tokens):
-    Q = np.zeros((len(total_vocab)))
-    counter = Counter(tokens)
-    words_count = len(tokens)
-    for token in np.unique(tokens):
-        tf = counter[token]/words_count
-        df = doc_freq(token)
-        idf = math.log((N+1)/(df+1))
-        try:
-            ind = total_vocab.index(token)
-            Q[ind] = tf*idf
-        except:
-            pass
+    Q = np.zeros(len(DF))
+    for w in tokens:
+        tf, idf = tokens.count(w) / len(tokens), math.log((N + 1) / (DF.get(w, 0) + 1))
+        Q[total_vocab.index(w)] = tf * idf
     return Q
 
-# Calcular la similitud coseno para un query dado
-def cosine_similarity(k, query):
-    print("Cosine Similarity")
-    preprocessed_query = preprocess(query)
-    tokens = word_tokenize(str(preprocessed_query))
-    d_cosines = []
-    query_vector = gen_vector(tokens)
-    for d in D:
-        d_cosines.append(cosine_sim(query_vector, d))
-    out = np.array(d_cosines).argsort()[-k:][::-1]
-    print(out)
+# Matriz D de vectores
+total_vocab = list(DF)
+D = np.zeros((N, len(total_vocab)))
+for (doc, token), value in tf_idf.items():
+    D[doc, total_vocab.index(token)] = value
 
-Q = cosine_similarity(10, "Without the drive of Rebeccah's insistence, Kate lost her momentum. She stood next a slatted oak bench, canisters still clutched, surveying")
-
-# Imprimir el contenido del documento de ID 200
-print_doc(200)
+# Ejecutar similitud coseno y mostrar el archivo con mayor similitud
+best_match_index = cosine_similarity("TINDERBOX")
+print("Archivo con mayor similitud coseno:", dataset[best_match_index][0])
